@@ -1,42 +1,47 @@
 import geopandas as gpd
 import matplotlib.pyplot as plt
+from matplotlib.colors import Normalize
 import os
 
-# Load shapefile
-shp_path = "rivers_overlap_basins/rivers_overlap_basin_1_interpolated_points_elevation_vu.shp"
-gdf = gpd.read_file(shp_path)
+# Paths
+points_fp = "rivers_overlap_basins/rivers_overlap_basin_1_interpolated_points_50_elevation_vu.shp"
+basin_fp = "hybas4_selected_subbasin_1.shp"
 
-# Filter invalid rows
-gdf = gdf[gdf["Vu1"].notna()]
-gdf = gdf[gdf["River_ID"].notna()]
+# Load data
+points_gdf = gpd.read_file(points_fp)
+basin_gdf = gpd.read_file(basin_fp)
 
-# Create output folder
-output_dir = "rivers_overlap_basins/basin_1_vu_zscore_maps"
-os.makedirs(output_dir, exist_ok=True)
+# Fix any invalid geometries in basin
+basin_gdf["geometry"] = basin_gdf["geometry"].buffer(0)
 
-# Loop through each River_ID group
-for river_id, group in gdf.groupby("River_ID"):
-    if len(group) < 20:
-        continue  # Skip short segments
+# Match CRS
+points_gdf = points_gdf.to_crs(basin_gdf.crs)
 
-    mean_vu = group["Vu1"].mean()
-    std_vu = group["Vu1"].std()
-    group["Vu_zscore"] = (group["Vu1"] - mean_vu) / std_vu
+# Clip points
+clipped_points = gpd.clip(points_gdf, basin_gdf)
 
-    # Plot
-    fig, ax = plt.subplots(1, 1, figsize=(8, 5))
-    group.plot(
-        ax=ax,
-        column="Vu_zscore",
-        cmap="coolwarm",
-        markersize=6,
-        legend=True,
-        legend_kwds={'label': "VU Z-score", 'shrink': 0.7}
-    )
-    ax.set_title(f"VU Z-score Anomaly Map - River ID {river_id}")
-    ax.set_axis_off()
-    plt.tight_layout()
-    plt.savefig(f"{output_dir}/{river_id}_zscore_map.png", dpi=150)
-    plt.close()
+# Calculate Vu z-score
+vu_mean = clipped_points["Vu1"].mean()
+vu_std = clipped_points["Vu1"].std()
+clipped_points["Vu_zscore"] = (clipped_points["Vu1"] - vu_mean) / vu_std
 
-print("✅ VU z-score anomaly maps generated.")
+# Plot
+fig, ax = plt.subplots(figsize=(10, 6))
+norm = Normalize(vmin=-3, vmax=3)
+
+clipped_points.plot(
+    ax=ax,
+    column="Vu_zscore",
+    cmap="coolwarm",
+    markersize=5,
+    legend=True,
+    norm=norm
+)
+
+basin_gdf.boundary.plot(ax=ax, edgecolor='black')
+ax.set_title("VU Z-score Anomalies in Basin 1")
+ax.set_axis_off()
+plt.tight_layout()
+plt.savefig("rivers_overlap_basins/basin_1_vu_zscore_map.png", dpi=300)
+plt.show()
+

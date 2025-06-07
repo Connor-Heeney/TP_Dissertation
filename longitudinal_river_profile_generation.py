@@ -2,52 +2,41 @@ import geopandas as gpd
 import matplotlib.pyplot as plt
 import os
 from tqdm import tqdm
-from pyproj import Geod
-import pandas as pd
+import numpy as np
 
 # Load shapefile
-shapefile_path = "rivers_overlap_basins/rivers_overlap_basin_1_interpolated_points_elevation_vu.shp"
-gdf = gpd.read_file(shapefile_path)
+shp_path = "rivers_overlap_basins/rivers_overlap_basin_1_interpolated_points_elevation_vu.shp"
+gdf = gpd.read_file(shp_path)
 
-# Ensure required columns
+# Ensure required columns are present
 required_cols = ["River_ID", "Order", "Elevation1", "Vu1"]
 missing = [col for col in required_cols if col not in gdf.columns]
 if missing:
     raise ValueError(f"Missing columns: {missing}")
 
-# Create geodesic calculator
-geod = Geod(ellps="WGS84")
-
-# Folder to save plots
-plots_folder = "rivers_overlap_basins/basin_1_plots"
-os.makedirs(plots_folder, exist_ok=True)
-
-def compute_cumulative_distance(group):
-    distances = [0]
-    coords = list(group.geometry.apply(lambda p: (p.x, p.y)))
+# Sort and compute cumulative distance
+def compute_cumulative_distance(coords):
+    dists = [0]
     for i in range(1, len(coords)):
-        lon1, lat1 = coords[i - 1]
-        lon2, lat2 = coords[i]
-        _, _, d = geod.inv(lon1, lat1, lon2, lat2)
-        distances.append(distances[-1] + d / 1000.0)  # in km
-    return distances
+        dist = coords[i].distance(coords[i - 1])
+        dists.append(dists[-1] + dist)
+    return dists
 
 def compute_profiles(gdf):
+    plots_folder = "rivers_overlap_basins/basin_1_plots"
+    os.makedirs(plots_folder, exist_ok=True)
+
     for river_id, group in tqdm(gdf.groupby("River_ID"), desc="Generating river profiles"):
         if len(group) < 20:
             continue
 
         group_sorted = group.sort_values("Order").reset_index(drop=True)
-        group_sorted = group_sorted.dropna(subset=["Elevation1", "Vu1"])
+        coords = group_sorted.geometry
+        dists = compute_cumulative_distance(coords)
+        group_sorted["Distance_km"] = np.array(dists) / 1000  # convert m to km
 
-        if len(group_sorted) < 10:
-            continue
-
-        # Compute distance
-        group_sorted["Distance_km"] = compute_cumulative_distance(group_sorted)
-
-        # Smoothing window
-        window = max(5, len(group_sorted) // 20)
+        # Apply rolling smoothing
+        window = 11 if len(group_sorted) >= 11 else max(3, len(group_sorted) // 2 * 2 + 1)
         group_sorted["Elevation_smooth"] = group_sorted["Elevation1"].rolling(window, center=True).mean()
         group_sorted["Vu_smooth"] = group_sorted["Vu1"].rolling(window, center=True).mean()
 

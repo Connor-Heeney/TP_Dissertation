@@ -63,6 +63,7 @@ critical_points = main_river[main_river["Anomaly"] == "Anomaly"]
 output_dir = "figures/basin_1"
 os.makedirs(output_dir, exist_ok=True)
 output_path = os.path.join(output_dir, "faults_vu_overlay.png")
+summary_table_path = os.path.join(output_dir, "fault_proximity_anomalies.csv")
 
 # Define fault colors
 fault_colors = {
@@ -73,6 +74,25 @@ fault_colors = {
     "Strike-Slip": "purple",
     "Other": "grey"
 }
+
+# Create buffers and calculate anomaly counts
+buffer_dist = 5000  # 5 km
+records = []
+for ftype, group in faults_clipped.groupby("Fault_Type"):
+    buffered = group.buffer(buffer_dist)
+    merged = buffered.unary_union
+    points_within = points[points.geometry.within(merged)]
+    anomalies = points_within[points_within["Vu_zscore"].abs() > 2]
+    records.append({
+        "Fault Type": ftype,
+        "Anomalies Near Fault": len(anomalies),
+        "Total Points Near Fault": len(points_within),
+        "Anomaly Density (per 100 pts)": (len(anomalies) / max(len(points_within), 1)) * 100
+    })
+
+summary_df = pd.DataFrame(records)
+summary_df.to_csv(summary_table_path, index=False)
+print(f"✅ Proximity anomaly summary saved to: {summary_table_path}")
 
 # Plot
 fig, ax = plt.subplots(figsize=(12, 8))

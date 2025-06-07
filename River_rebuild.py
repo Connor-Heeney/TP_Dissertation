@@ -3,55 +3,70 @@ import networkx as nx
 from tqdm import tqdm
 import os
 
-# Load your river CSV file (update the path as needed)
+# Load river CSV file
 df = pd.read_csv("Rivers.csv")
-
-# Ensure required columns exist
 assert 'HYRIV_ID' in df.columns, "Missing HYRIV_ID"
 assert 'NEXT_DOWN' in df.columns, "Missing NEXT_DOWN"
 
-# Create a directed graph of the river network
+# Build directed river network graph
 G = nx.DiGraph()
-
-# Add edges to graph
 edges = [(row['HYRIV_ID'], row['NEXT_DOWN']) for _, row in df.iterrows()
          if row['NEXT_DOWN'] != 0 and not pd.isnull(row['NEXT_DOWN'])]
 G.add_edges_from(edges)
 
-# Identify source nodes (no upstream)
-sources = [n for n in G.nodes if G.in_degree(n) == 0]
+# Identify all source nodes
+all_sources = [n for n in G.nodes if G.in_degree(n) == 0]
 
-# Prepare to store results
+# Check for existing progress
+processed_ids = set()
+if os.path.exists("temp_RiverID_partial.csv"):
+    processed_df = pd.read_csv("temp_RiverID_partial.csv")
+    processed_ids = set(processed_df['HYRIV_ID'])
+
+# Only process sources not already handled
+sources_to_process = [s for s in all_sources if s not in processed_ids]
+
+# Initialize output list
 river_id_map = []
-chunk_size = 200  # adjust as needed
-output_path = "Rivers_with_RiverID.csv"
+chunk_size = 200
 
-# Process in chunks
-for start in tqdm(range(0, len(sources), chunk_size), desc="Processing in chunks"):
-    end = min(start + chunk_size, len(sources))
-    for i, source in enumerate(sources[start:end], start=start):
+# Process in chunks using BFS (faster and memory-safe)
+for start in tqdm(range(0, len(sources_to_process), chunk_size), desc="Processing in chunks"):
+    end = min(start + chunk_size, len(sources_to_process))
+    chunk = sources_to_process[start:end]
+
+    for i, source in enumerate(chunk, start=start):
         river_id = f"River_{i+1}"
-        try:
-            for path in nx.single_source_shortest_path(G, source).values():
-                for order, segment in enumerate(path):
-                    river_id_map.append({
-                        'HYRIV_ID': segment,
-                        'River_ID': river_id,
-                        'Order': order
-                    })
-        except Exception as e:
-            print(f"Error processing source {source}: {e}")
+        visited = set()
+        queue = [(source, 0)]
 
-    # Save intermediate results every chunk
+        while queue:
+            node, order = queue.pop(0)
+            if node not in visited:
+                visited.add(node)
+                river_id_map.append({
+                    'HYRIV_ID': node,
+                    'River_ID': river_id,
+                    'Order': order
+                })
+                for neighbor in G.successors(node):
+                    queue.append((neighbor, order + 1))
+
+    # Save to file incrementally
     partial_df = pd.DataFrame(river_id_map)
     partial_df.drop_duplicates(subset=['HYRIV_ID'], inplace=True)
-    partial_df.to_csv("temp_RiverID_partial.csv", index=False)
+    if not os.path.exists("temp_RiverID_partial.csv"):
+        partial_df.to_csv("temp_RiverID_partial.csv", index=False, mode='w')
+    else:
+        partial_df.to_csv("temp_RiverID_partial.csv", index=False, mode='a', header=False)
+    river_id_map.clear()  # reset for next chunk
 
-# Final merge
-river_df = pd.read_csv("temp_RiverID_partial.csv")
-df = df.merge(river_df, on='HYRIV_ID', how='left')
-df.to_csv(output_path, index=False)
+# Merge full result
+final_df = pd.read_csv("temp_RiverID_partial.csv")
+df = df.merge(final_df, on='HYRIV_ID', how='left')
+df.to_csv("Rivers_with_RiverID.csv", index=False)
 
-print(f"Saved full river table with River_ID to {output_path}")
-if os.path.exists("temp_RiverID_partial.csv"):
-    os.remove("temp_RiverID_partial.csv")
+# Clean up temp file
+os.remove("temp_RiverID_partial.csv")
+
+print("River ID assignment complete. Output saved to 'Rivers_with_RiverID.csv'")
